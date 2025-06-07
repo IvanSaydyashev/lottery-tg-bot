@@ -73,12 +73,19 @@ class Bot:
                 chat = update.my_chat_member.chat
                 if chat.type != ChatType.PRIVATE:
                     channels = context.bot_data[user.id]["channels"]
-                    chan = channels[channels.index({
-                        "status": ChatMemberStatus.MEMBER,
-                        "chat_id": chat.id,
-                        "username": chat.mention_html()
-                    })]
-                    chan["status"] = ChatMemberStatus.ADMINISTRATOR
+                    try:
+                        chan = channels[channels.index({
+                            "status": ChatMemberStatus.MEMBER,
+                            "chat_id": chat.id,
+                            "username": chat.mention_html()
+                        })]
+                        chan["status"] = ChatMemberStatus.ADMINISTRATOR
+                    except ValueError:
+                        channels.append({
+                            "status": ChatMemberStatus.ADMINISTRATOR,
+                            "chat_id": chat.id,
+                            "username": chat.mention_html()
+                        })
                     await self.update_channel_list_message(update, context)
             case ChatMemberStatus.LEFT | ChatMemberStatus.BANNED:
                 user = update.my_chat_member.from_user
@@ -150,5 +157,7 @@ class Bot:
             if not all(map(lambda c: c["status"] == ChatMemberStatus.ADMINISTRATOR.value, channels)):
                 await query.answer("Бот должен быть администратором во всех каналах, где он есть!",
                                    show_alert=True)
+                return None
             else:
                 return Bot.NewLotteryState.TEXT.value
+        return None
