@@ -10,3 +10,4 @@ wheels/
 .idea
 .venv
 .env
+secrets
