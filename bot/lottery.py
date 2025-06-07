@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime
 from enum import Enum
 
@@ -8,22 +9,9 @@ from telegram.ext import ConversationHandler, CommandHandler, CallbackQueryHandl
 
 import re
 
+from services.firebase import FirebaseClient
 
-def get_publisher_channels_keyboard(update: Update,
-                                    context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
-    """
-    Возвращает клавиатуру с каналами пользователя, которые могут быть выбраны в качестве публикатора.
-    """
-    channels = context.bot_data[update.effective_user.id]["channels"]
-    keyboard = []
-    for i, channel in enumerate(channels):
-        match = re.search(r'>([^<]+)<', channel["username"])
-        title = match.group(1) if match else "Канал"
 
-        button = InlineKeyboardButton(text=title, callback_data=f"{channel['chat_id']}")
-        keyboard.append([button])  # каждая кнопка в отдельной строке
-    keyboard.append([InlineKeyboardButton("Назад", callback_data="back_data")])
-    return InlineKeyboardMarkup(keyboard)
 
 def parse_date(date_str: str) -> datetime | None:
     """
@@ -46,7 +34,9 @@ class Lottery:
         PUBLISHER = 6
 
 
-    def __init__(self):
+    def __init__(self, firebase: FirebaseClient):
+        self.firebase_db = firebase
+
         self.mode_keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("Закончить по дате", callback_data="mode_date")],
             [InlineKeyboardButton("Закончить по числу участников", callback_data="mode_count")],
@@ -63,6 +53,20 @@ class Lottery:
         self.lottery_count_guide = "Отлично! Теперь выберите количество участников, при достижении которого розыгрыш будет заканчиваться."
         self.lottery_publisher_guide = "Отлично! Выберите канал, который опубликует результаты розыгрыша."
 
+    async def get_publisher_channels_keyboard(self, update: Update,
+                                        context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
+        """
+        Возвращает клавиатуру с каналами пользователя, которые могут быть выбраны в качестве публикатора.
+        """
+        channels = await self.firebase_db.get_user_channels(update.effective_user.id)
+        keyboard = []
+        for i, channel in enumerate(channels):
+            match = re.search(r'>([^<]+)<', channel["username"])
+            title = match.group(1) if match else "Канал"
+            button = InlineKeyboardButton(text=title, callback_data=f"{channel['chat_id']}")
+            keyboard.append([button])
+        keyboard.append([InlineKeyboardButton("Назад", callback_data="back_data")])
+        return InlineKeyboardMarkup(keyboard)
 
     def get_handler(self):
         return ConversationHandler(
@@ -100,51 +104,46 @@ class Lottery:
         )
 
     async def create_channel_list_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        keyboard = [
-            [InlineKeyboardButton("Готово", callback_data="ready")],
-        ]
-        keyboard = InlineKeyboardMarkup(keyboard)
-        context.bot_data.setdefault(update.effective_user.id, {"channels": []})
-        channels = context.bot_data[update.effective_user.id]["channels"]
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Готово", callback_data="ready")]])
+        user_id = update.effective_user.id
+        channels = await self.firebase_db.get_user_channels(user_id)
         message = await update.message.reply_text(
             "Для начала добавьте бота как администратора во все каналы, "
             "которые будут организаторами розыгрыша.\n\nВаши каналы, в которых есть бот:\n" +
-            "\n".join(map(lambda x: f'{x["username"]} ({x["status"]})', sorted(channels, key=lambda x: x["username"]))),
+            "\n".join(f'{c["username"]} ({c["status"]})' for c in sorted(channels, key=lambda x: x["username"])),
             reply_markup=keyboard,
             parse_mode="HTML",
             disable_web_page_preview=True
         )
-        context.bot_data[update.effective_user.id]["added_channels_message"] = message.id
+        await self.firebase_db.write(f"users/{user_id}", {"added_channels_message": message.message_id})
 
     async def update_channel_list_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user = update.my_chat_member.from_user
-        channels = context.bot_data[user.id]["channels"]
-        keyboard = [
-            [InlineKeyboardButton("Начать", callback_data="ready")],
-        ]
-        keyboard = InlineKeyboardMarkup(keyboard)
-        message_id = context.bot_data[user.id]["added_channels_message"]
+        user_id = user.id
+        channels = await self.firebase_db.get_user_channels(user_id)
+        added_msg_id = (await self.firebase_db.read(f"users/{user_id}/added_channels_message")) or 0
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Начать", callback_data="ready")]])
         await context.bot.edit_message_text(
-            chat_id=user.id,
-            message_id=message_id,
+            chat_id=user_id,
+            message_id=added_msg_id,
             text="Для начала добавьте бота как администратора во все каналы, "
                  "которые будут организаторами розыгрыша.\n\nВаши каналы, в которых есть бот:\n" +
-                 "\n".join(map(lambda x: f'{x["username"]} ({x["status"]})',
-                               sorted(channels, key=lambda x: x["username"]))),
+                 "\n".join(f'{c["username"]} ({c["status"]})' for c in sorted(channels, key=lambda x: x["username"])),
             parse_mode="HTML",
             reply_markup=keyboard,
             disable_web_page_preview=True
         )
 
     async def new_lot(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        context.user_data["lottery_id"] = str(uuid.uuid4())
         await self.create_channel_list_message(update, context)
         return self.NewLotteryState.READY.value
 
     async def setup_lot(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
-        user = update.effective_user
+        user_id = update.effective_user.id
+        channels = await self.firebase_db.get_user_channels(user_id)
 
-        channels = context.bot_data[user.id]["channels"]
         if not channels:
             await query.answer("Добавьте бота как администратора хотя бы в один канал!", show_alert=True)
             return self.NewLotteryState.READY.value
@@ -153,13 +152,13 @@ class Lottery:
             return self.NewLotteryState.READY.value
 
         await query.edit_message_text(self.lottery_text_guide)
-
         return self.NewLotteryState.TEXT.value
 
-
     async def lottery_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        description = update.message  # TODO: Сохранить описание в бд
-
+        description = update.message
+        await self.firebase_db.write(f"lotteries/{update.effective_user.id}/{context.user_data['lottery_id']}", {
+            "description": description.text
+        })
         await update.message.reply_text(self.lottery_num_winners_guide,
                                         reply_markup=self.back_keyboard)
         return self.NewLotteryState.NUM_WINNERS.value
@@ -174,7 +173,10 @@ class Lottery:
             return self.NewLotteryState.NUM_WINNERS.value
 
         num_winners = update.message.text
-        if num_winners.isdigit():  # TODO: Сохранить число в бд
+        if num_winners.isdigit():
+            await self.firebase_db.write(f"lotteries/{update.effective_user.id}/{context.user_data['lottery_id']}", {
+                "num_winners": int(num_winners)
+            })
             await update.message.reply_text(self.lottery_mode_guide, reply_markup=self.mode_keyboard)
             return self.NewLotteryState.MODE.value
 
@@ -209,8 +211,11 @@ class Lottery:
             return self.NewLotteryState.COUNT.value
 
         count_str = update.message.text
-        publisher_keyboard = get_publisher_channels_keyboard(update, context)
-        if count_str.isdigit():  # TODO: Сохранить число в бд
+        publisher_keyboard = await self.get_publisher_channels_keyboard(update, context)
+        if count_str.isdigit():
+            await self.firebase_db.write(f"lotteries/{update.effective_user.id}/{context.user_data['lottery_id']}", {
+                "max_count": int(count_str),
+            })
             await update.message.reply_text(self.lottery_publisher_guide,
                                             reply_markup=publisher_keyboard)
             return self.NewLotteryState.PUBLISHER.value
@@ -230,8 +235,11 @@ class Lottery:
             return self.NewLotteryState.DATE.value
 
         date_str = update.message.text
-        date = parse_date(date_str)  # TODO: Сохранить дату в бд
-        publisher_keyboard = get_publisher_channels_keyboard(update, context)
+        date = parse_date(date_str)
+        await self.firebase_db.write(f"lotteries/{update.effective_user.id}/{context.user_data['lottery_id']}", {
+            "until_date": str(date)
+        })
+        publisher_keyboard = await self.get_publisher_channels_keyboard(update, context)
         if date:
             await update.message.reply_text(self.lottery_publisher_guide,
                                             reply_markup=publisher_keyboard)
@@ -241,7 +249,6 @@ class Lottery:
             "Не удалось распознать дату." + self.lottery_date_guide, reply_markup=self.back_keyboard)
         return self.NewLotteryState.DATE.value
 
-
     async def lottery_publisher(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         query = update.callback_query
 
@@ -249,8 +256,11 @@ class Lottery:
             await query.edit_message_text(self.lottery_mode_guide,
                                           reply_markup=self.mode_keyboard)
             return self.NewLotteryState.MODE.value
-        # TODO: Сохранить канал в бд
+
+        await self.firebase_db.write(f"lotteries/{update.effective_user.id}/{context.user_data['lottery_id']}", {
+            "publisher_chat_id": int(query.data)
+        })
+
         await context.bot.send_message(chat_id=query.from_user.id, text="Отлично! Розыгрыш создан!")
         return ConversationHandler.END
-
 
