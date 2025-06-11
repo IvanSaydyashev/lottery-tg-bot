@@ -269,13 +269,12 @@ class Lottery:
             "publisher_chat_id": int(query.data)
         })
         await self.publish_lottery(update, context)
-        lottery_url = await self.generate_invite_link(update, context)
-        await context.bot.send_message(chat_id=query.from_user.id, text="Отлично! Розыгрыш создан!\n"
-                                                                        "Ссылка на розыгрыш: " + lottery_url)
         return ConversationHandler.END
 
     async def publish_lottery(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         lottery_id = context.user_data["lottery_id"]
+        description = await self.firebase_db.read(
+            f"lotteries/{update.effective_user.id}/{lottery_id}/description")
         chat_id = await self.firebase_db.read(
             f"lotteries/{update.effective_user.id}/{lottery_id}/publisher_chat_id")
         num_winners = await self.firebase_db.read(
@@ -285,7 +284,7 @@ class Lottery:
             f"lotteries/{update.effective_user.id}/{lottery_id}/until_date")
         if date:
             date = datetime.fromisoformat(date)
-            context.job_queue.run_once(self.randomise_job.generate_result, when=date, data=
+            context.job_queue.run_once(self.randomise_job.date_result, when=date, data=
             {
                 "owner_id": update.effective_user.id,
                 "lottery_id": lottery_id,
@@ -296,7 +295,8 @@ class Lottery:
         max_count = await self.firebase_db.read(
             f"lotteries/{update.effective_user.id}/{lottery_id}/max_count"
         )
-        context.job_queue.run_repeating(self.randomise_job.check_lottery_count, interval=10, first=0, data=
+        interval_seconds = 60 * 10
+        context.job_queue.run_repeating(self.randomise_job.check_lottery_count, interval=interval_seconds, first=0, data=
         {
             "owner_id": update.effective_user.id,
             "lottery_id": lottery_id,
@@ -304,7 +304,13 @@ class Lottery:
             "publisher_chat_id": chat_id,
             "num_winners": num_winners
         })
-
+        lottery_url = await self.generate_invite_link(update, context)
+        await context.bot.send_message(chat_id=update.effective_user.id,
+                                       text=f"Розыгрыш успешно опубликован!\n")
+        await context.bot.send_message(
+            chat_id=chat_id, text=f'{description}\nДля участия перейдите по <a href="{lottery_url}">ссылке</a>',
+            parse_mode="HTML"
+        )
 
     async def generate_invite_link(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
         bot_username = "t_ad_manager_bot"

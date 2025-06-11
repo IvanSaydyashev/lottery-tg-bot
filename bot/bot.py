@@ -27,7 +27,8 @@ class Bot:
             if not this_lottery:
                 await context.bot.send_message(chat_id=update.effective_chat.id, text="Розыгрыш не существует или уже завершен!")
             await update.message.reply_text(f"Вы присоединились к розыгрышу с ID {lottery_id}!")
-            await self.firebase_db.update(f"lotteries/{owner_id}/{lottery_id}/participants/", {update.effective_user.id: True})
+            await self.firebase_db.update(f"lotteries/{owner_id}/{lottery_id}/participants/",
+                                          {update.effective_user.id: update.effective_user.username})
         keyboard = ReplyKeyboardMarkup(
             [[KeyboardButton("🎉 Создать розыгрыш")]],
             resize_keyboard=True,
