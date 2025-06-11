@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 from enum import Enum
+from zoneinfo import ZoneInfo
 
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton, Update
 from telegram.constants import ChatMemberStatus
@@ -9,6 +10,8 @@ from telegram.ext import ConversationHandler, CommandHandler, CallbackQueryHandl
 
 import re
 
+from bot.randomiser import Randomiser
+from services.utils import encode_payload
 from services.firebase import FirebaseClient
 
 
@@ -19,7 +22,9 @@ def parse_date(date_str: str) -> datetime | None:
     иначе возвращает None.
     """
     try:
-        return datetime.strptime(date_str, "%d.%m.%Y %H:%M")
+        date = datetime.strptime(date_str, "%d.%m.%Y %H:%M")
+        moscow_time = date.replace(tzinfo=ZoneInfo("Europe/Moscow"))
+        return moscow_time.astimezone(ZoneInfo("UTC"))
     except ValueError:
         return None
 
@@ -34,9 +39,9 @@ class Lottery:
         PUBLISHER = 6
 
 
-    def __init__(self, firebase: FirebaseClient):
+    def __init__(self, firebase: FirebaseClient, randomiser: Randomiser):
         self.firebase_db = firebase
-
+        self.randomise_job = randomiser
         self.mode_keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("Закончить по дате", callback_data="mode_date")],
             [InlineKeyboardButton("Закончить по числу участников", callback_data="mode_count")],
@@ -49,7 +54,7 @@ class Lottery:
         self.lottery_text_guide = "Отлично! Теперь отправьте полное описание розыгрыша вместе со вложениями при необходимости."
         self.lottery_num_winners_guide = "Определите количество победителей."
         self.lottery_mode_guide = "Теперь выберите режим окончания розыгрыша."
-        self.lottery_date_guide = "Теперь выберите дату окончания розыгрыша. Например: 01.01.2023 00:00"
+        self.lottery_date_guide = "Теперь выберите дату окончания розыгрыша по МСК. Например: 01.01.2023 00:00"
         self.lottery_count_guide = "Отлично! Теперь выберите количество участников, при достижении которого розыгрыш будет заканчиваться."
         self.lottery_publisher_guide = "Отлично! Выберите канал, который опубликует результаты розыгрыша."
 
@@ -115,7 +120,7 @@ class Lottery:
             parse_mode="HTML",
             disable_web_page_preview=True
         )
-        await self.firebase_db.write(f"users/{user_id}", {"added_channels_message": message.message_id})
+        await self.firebase_db.update(f"users/{user_id}", {"added_channels_message": message.message_id})
 
     async def update_channel_list_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user = update.my_chat_member.from_user
@@ -135,7 +140,7 @@ class Lottery:
         )
 
     async def new_lot(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        context.user_data["lottery_id"] = str(uuid.uuid4())
+        context.user_data["lottery_id"] = str(uuid.uuid4())[:8]
         await self.create_channel_list_message(update, context)
         return self.NewLotteryState.READY.value
 
@@ -174,7 +179,7 @@ class Lottery:
 
         num_winners = update.message.text
         if num_winners.isdigit():
-            await self.firebase_db.write(f"lotteries/{update.effective_user.id}/{context.user_data['lottery_id']}", {
+            await self.firebase_db.update(f"lotteries/{update.effective_user.id}/{context.user_data['lottery_id']}", {
                 "num_winners": int(num_winners)
             })
             await update.message.reply_text(self.lottery_mode_guide, reply_markup=self.mode_keyboard)
@@ -213,7 +218,7 @@ class Lottery:
         count_str = update.message.text
         publisher_keyboard = await self.get_publisher_channels_keyboard(update, context)
         if count_str.isdigit():
-            await self.firebase_db.write(f"lotteries/{update.effective_user.id}/{context.user_data['lottery_id']}", {
+            await self.firebase_db.update(f"lotteries/{update.effective_user.id}/{context.user_data['lottery_id']}", {
                 "max_count": int(count_str),
             })
             await update.message.reply_text(self.lottery_publisher_guide,
@@ -235,12 +240,15 @@ class Lottery:
             return self.NewLotteryState.DATE.value
 
         date_str = update.message.text
-        date = parse_date(date_str)
-        await self.firebase_db.write(f"lotteries/{update.effective_user.id}/{context.user_data['lottery_id']}", {
-            "until_date": str(date)
+        utc_time = parse_date(date_str)
+
+
+        await self.firebase_db.update(f"lotteries/{update.effective_user.id}/{context.user_data['lottery_id']}", {
+            "until_date": utc_time.isoformat()
         })
+
         publisher_keyboard = await self.get_publisher_channels_keyboard(update, context)
-        if date:
+        if utc_time:
             await update.message.reply_text(self.lottery_publisher_guide,
                                             reply_markup=publisher_keyboard)
             return self.NewLotteryState.PUBLISHER.value
@@ -257,10 +265,59 @@ class Lottery:
                                           reply_markup=self.mode_keyboard)
             return self.NewLotteryState.MODE.value
 
-        await self.firebase_db.write(f"lotteries/{update.effective_user.id}/{context.user_data['lottery_id']}", {
+        await self.firebase_db.update(f"lotteries/{update.effective_user.id}/{context.user_data['lottery_id']}", {
             "publisher_chat_id": int(query.data)
         })
-
-        await context.bot.send_message(chat_id=query.from_user.id, text="Отлично! Розыгрыш создан!")
+        await self.publish_lottery(update, context)
         return ConversationHandler.END
 
+    async def publish_lottery(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        lottery_id = context.user_data["lottery_id"]
+        description = await self.firebase_db.read(
+            f"lotteries/{update.effective_user.id}/{lottery_id}/description")
+        chat_id = await self.firebase_db.read(
+            f"lotteries/{update.effective_user.id}/{lottery_id}/publisher_chat_id")
+        num_winners = await self.firebase_db.read(
+            f"lotteries/{update.effective_user.id}/{lottery_id}/num_winners"
+        )
+        date = await self.firebase_db.read(
+            f"lotteries/{update.effective_user.id}/{lottery_id}/until_date")
+        if date:
+            date = datetime.fromisoformat(date)
+            context.job_queue.run_once(self.randomise_job.date_result, when=date, data=
+            {
+                "owner_id": update.effective_user.id,
+                "lottery_id": lottery_id,
+                "publisher_chat_id": chat_id,
+                "num_winners": num_winners
+            })
+            return
+        max_count = await self.firebase_db.read(
+            f"lotteries/{update.effective_user.id}/{lottery_id}/max_count"
+        )
+        interval_seconds = 60 * 10
+        context.job_queue.run_repeating(self.randomise_job.check_lottery_count, interval=interval_seconds, first=0, data=
+        {
+            "owner_id": update.effective_user.id,
+            "lottery_id": lottery_id,
+            "goal_participants": max_count,
+            "publisher_chat_id": chat_id,
+            "num_winners": num_winners
+        })
+        lottery_url = await self.generate_invite_link(update, context)
+        await context.bot.send_message(chat_id=update.effective_user.id,
+                                       text=f"Розыгрыш успешно опубликован!\n")
+        await context.bot.send_message(
+            chat_id=chat_id, text=f'{description}\nДля участия перейдите по <a href="{lottery_url}">ссылке</a>',
+            parse_mode="HTML"
+        )
+
+    async def generate_invite_link(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+        bot_username = "t_ad_manager_bot"
+
+        lottery_id = context.user_data["lottery_id"]
+        user_id = update.effective_user.id
+        encoded_payload = encode_payload(user_id, lottery_id)
+
+        url = f"https://t.me/{bot_username}?start={encoded_payload}"
+        return url

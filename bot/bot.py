@@ -4,13 +4,14 @@ from telegram.ext import (Application, ContextTypes, CommandHandler,
 from telegram.constants import ChatMemberStatus, ChatType
 
 from bot.lottery import Lottery
+from bot.randomiser import Randomiser
 from services.firebase import FirebaseClient
-
+from services.utils import decode_payload
 
 class Bot:
-
     def __init__(self, app: Application, firebase: FirebaseClient) -> None:
-        self.lottery = Lottery(firebase)
+        self.randomiser = Randomiser(firebase)
+        self.lottery = Lottery(firebase, self.randomiser)
         self.firebase_db = firebase
         app.add_handler(self.lottery.get_handler())
         app.add_handler(ChatMemberHandler(self.invitation))
@@ -18,6 +19,16 @@ class Bot:
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Send a message when the command /start is issued."""
+        if context.args:
+            data = decode_payload(context.args[0])
+            owner_id = data["user_id"]
+            lottery_id = data["lottery_id"]
+            this_lottery = await self.firebase_db.read(f"lotteries/{owner_id}/{lottery_id}") or []
+            if not this_lottery:
+                await context.bot.send_message(chat_id=update.effective_chat.id, text="Розыгрыш не существует или уже завершен!")
+            await update.message.reply_text(f"Вы присоединились к розыгрышу с ID {lottery_id}!")
+            await self.firebase_db.update(f"lotteries/{owner_id}/{lottery_id}/participants/",
+                                          {update.effective_user.id: update.effective_user.username})
         keyboard = ReplyKeyboardMarkup(
             [[KeyboardButton("🎉 Создать розыгрыш")]],
             resize_keyboard=True,
@@ -66,4 +77,3 @@ class Bot:
                     await self.lottery.update_channel_list_message(update, context)
             case _:
                 pass
-

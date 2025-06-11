@@ -18,13 +18,10 @@ class FirebaseClient:
 
 
     async def update(self, path: str, data: dict) -> None:
-        if isinstance(data, dict):
-            self.db.reference(path).update(data)
-        else:
-            raise TypeError("data must be a dict")
+        self.db.reference(path).update(data)
 
 
-    async def read(self, path: str) -> object:
+    async def read(self, path: str) -> object|str|int|dict|None:
         return self.db.reference(path).get()
 
 
