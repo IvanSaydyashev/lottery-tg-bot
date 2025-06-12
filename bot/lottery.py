@@ -84,7 +84,10 @@ class Lottery:
                     CallbackQueryHandler(self.setup_lot)
                 ],
                 self.NewLotteryState.TEXT.value: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.lottery_text),
+                    MessageHandler(
+                        (filters.TEXT | filters.PHOTO | filters.Document.IMAGE) & ~filters.COMMAND,
+                        self.lottery_text
+                    ),
                 ],
                 self.NewLotteryState.NUM_WINNERS.value: [
                     CallbackQueryHandler(self.lottery_num_winners),
@@ -160,9 +163,19 @@ class Lottery:
         return self.NewLotteryState.TEXT.value
 
     async def lottery_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        description = update.message
+        message = update.message
+
+        description = message.caption or message.text or ""
+        photo_file_id = None
+
+        if message.photo:
+            photo_file_id = message.photo[-1].file_id
+        elif message.document and message.document.mime_type.startswith("image/"):
+            photo_file_id = message.document.file_id
+
         await self.firebase_db.write(f"lotteries/{update.effective_user.id}/{context.user_data['lottery_id']}", {
-            "description": description.text
+            "description": description,
+            "photo_id": photo_file_id
         })
         await update.message.reply_text(self.lottery_num_winners_guide,
                                         reply_markup=self.back_keyboard)
@@ -307,6 +320,15 @@ class Lottery:
         lottery_url = await self.generate_invite_link(update, context)
         await context.bot.send_message(chat_id=update.effective_user.id,
                                        text=f"Розыгрыш успешно опубликован!\n")
+        photo_id = await self.firebase_db.read(
+            f"lotteries/{update.effective_user.id}/{lottery_id}/photo_id")
+        if photo_id:
+            await context.bot.send_photo(
+                chat_id=chat_id, photo=photo_id, caption=f'{description}\nДля участия перейдите по <a href="{lottery_url}">ссылке</a>',
+                parse_mode="HTML"
+            )
+            return
+
         await context.bot.send_message(
             chat_id=chat_id, text=f'{description}\nДля участия перейдите по <a href="{lottery_url}">ссылке</a>',
             parse_mode="HTML"
