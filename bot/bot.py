@@ -9,11 +9,15 @@ from services.firebase import FirebaseClient
 from services.utils import decode_payload
 
 class Bot:
-    def __init__(self, app: Application, firebase: FirebaseClient) -> None:
+    def __init__(self, app: Application, firebase: FirebaseClient, bot_username: str) -> None:
+        if bot_username is None:
+            raise TypeError("Bot username cannot be None")
+        self.bot_username = bot_username
         self.randomiser = Randomiser(firebase)
-        self.lottery = Lottery(firebase, self.randomiser)
+        self.lottery = Lottery(firebase, self.randomiser, self.bot_username)
         self.firebase_db = firebase
-        app.add_handler(self.lottery.get_handler())
+        for h in self.lottery.get_handlers():
+            app.add_handler(h)
         app.add_handler(ChatMemberHandler(self.invitation))
         app.add_handler(CommandHandler("start", self.start))
 

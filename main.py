@@ -21,7 +21,7 @@ def main() -> None:
     load_dotenv()
     firebase = FirebaseClient(os.getenv("FIREBASE_URL"), os.getenv("FIREBASE_SECRET"))
     app = Application.builder().token(os.getenv("TOKEN")).persistence(DictPersistence()).build()
-    Bot(app, firebase)
+    Bot(app, firebase, os.getenv("BOT_USERNAME"))
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
