@@ -397,5 +397,11 @@ class Lottery:
                 await self.firebase_db.update(f"lotteries/{lottery_id}/participants/",
                                               {update.effective_user.id: update.effective_user.username})
                 await query.answer("Вы участвуете в розыгрыше!")
+                await self.update_participate_button(update, lottery_id)
             await query.answer("Розыгрыша не было или он завершён")
         await query.answer("Розыгрыша не было или он завершён")
+
+    async def update_participate_button(self, update: Update, lottery_id: str) -> None:
+        members = len((await self.firebase_db.read(f"lotteries/{lottery_id}/participants")).keys())
+        keyboard = [[InlineKeyboardButton(text=f"Участвовать ({members})", callback_data=f"participate {lottery_id}")]]
+        await update.callback_query.edit_message_reply_markup(InlineKeyboardMarkup(keyboard))
