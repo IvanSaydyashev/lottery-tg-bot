@@ -2,6 +2,8 @@ import uuid
 from datetime import datetime
 from enum import Enum
 from zoneinfo import ZoneInfo
+import re
+import logging
 
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton, Update
 from telegram.constants import ChatMemberStatus
@@ -9,11 +11,11 @@ from telegram.ext import ConversationHandler, CommandHandler, CallbackQueryHandl
     filters, ContextTypes
 from telegram.error import TelegramError
 
-import re
-
 from bot.randomiser import Randomiser
 from services.utils import encode_payload
 from services.firebase import FirebaseClient
+
+logger = logging.getLogger(__name__)
 
 
 def parse_date(date_str: str) -> datetime | None:
@@ -164,6 +166,7 @@ class Lottery:
         return self.NewLotteryState.READY.value
 
     async def setup_lot(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        logger.info("creating new lottery")
         query = update.callback_query
         user_id = update.effective_user.id
         channels = await self.firebase_db.get_user_channels(user_id)
@@ -179,6 +182,7 @@ class Lottery:
         return self.NewLotteryState.TEXT.value
 
     async def lottery_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        logger.info("adding text")
         description = update.message
         await self.firebase_db.write(f"lotteries/{context.user_data['lottery_id']}", {
             "owner": update.effective_user.id,
@@ -190,6 +194,7 @@ class Lottery:
         return self.NewLotteryState.LINKED_CHANNELS.value
 
     async def add_linked_channels(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        logger.info("adding linked channels")
         query = update.callback_query
         data = query.data
         await query.answer()
@@ -214,6 +219,7 @@ class Lottery:
         return self.NewLotteryState.LINKED_CHANNELS.value
 
     async def lottery_num_winners(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        logger.info("adding num_winners")
         if update.callback_query:
             query = update.callback_query
             if query.data == "back_data":
@@ -234,6 +240,7 @@ class Lottery:
         return self.NewLotteryState.NUM_WINNERS.value
 
     async def lottery_mode(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        logger.info("setting mode")
         query = update.callback_query
 
         if query.data == "mode_date":
@@ -249,6 +256,7 @@ class Lottery:
         return self.NewLotteryState.NUM_WINNERS.value
 
     async def lottery_count(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        logger.info("setting mode: count")
         if update.callback_query:
             query = update.callback_query
             if query.data == "back_data":
@@ -272,6 +280,7 @@ class Lottery:
         return self.NewLotteryState.COUNT.value
 
     async def lottery_date(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        logger.info("setting mode: date")
         if update.callback_query:
             query = update.callback_query
             if query.data == "back_data":
@@ -298,6 +307,7 @@ class Lottery:
         return self.NewLotteryState.DATE.value
 
     async def lottery_publisher(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        logger.info(f"adding publisher channel: {update.callback_query.data}")
         query = update.callback_query
         await query.answer()
 
@@ -313,6 +323,7 @@ class Lottery:
         return ConversationHandler.END
 
     async def publish_lottery(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        logger.info("publishing lottery")
         lottery_id = context.user_data["lottery_id"]
         description = await self.firebase_db.read(
             f"lotteries/{lottery_id}/description")
@@ -332,23 +343,23 @@ class Lottery:
                 "publisher_chat_id": chat_id,
                 "num_winners": num_winners
             })
-            return
         max_count = await self.firebase_db.read(
             f"lotteries/{lottery_id}/max_count"
         )
-        interval_seconds = 60 * 10
-        context.job_queue.run_repeating(
-            self.randomise_job.check_lottery_count,
-            interval=interval_seconds,
-            first=0,
-            data={
-                "owner_id": update.effective_user.id,
-                "lottery_id": lottery_id,
-                "goal_participants": max_count,
-                "publisher_chat_id": chat_id,
-                "num_winners": num_winners
-            }
-        )
+        if max_count:
+            interval_seconds = 60 * 10
+            context.job_queue.run_repeating(
+                self.randomise_job.check_lottery_count,
+                interval=interval_seconds,
+                first=0,
+                data={
+                    "owner_id": update.effective_user.id,
+                    "lottery_id": lottery_id,
+                    "goal_participants": max_count,
+                    "publisher_chat_id": chat_id,
+                    "num_winners": num_winners
+                }
+            )
         await context.bot.send_message(chat_id=update.effective_user.id,
                                        text=f"Розыгрыш успешно опубликован!\n")
         keyboad = [[InlineKeyboardButton("Участвовать", callback_data=f"participate {lottery_id}")]]
@@ -359,6 +370,7 @@ class Lottery:
         )
 
     async def participate_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        logger.info(f"participating button clicked by: {update.effective_user.username}")
         user = update.effective_user
         query = update.callback_query
         match = re.match(r"^participate (\w+)$", query.data)
@@ -372,7 +384,7 @@ class Lottery:
                         match participant.status:
                             case ChatMemberStatus.LEFT | ChatMemberStatus.BANNED:
                                 await query.answer("Вы не подписаны на все каналы, "
-                                             "подписка на которые обязательна для участия в розыгрыше")
+                                                   "подписка на которые обязательна для участия в розыгрыше")
                                 return
                     except TelegramError as e:
                         print(e)

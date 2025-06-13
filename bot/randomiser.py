@@ -13,7 +13,7 @@ class Randomiser:
         data = context.job.data
         owner_id, lottery_id = data["owner_id"], data["lottery_id"]
         await self.get_result(context)
-        await self.firebase_db.delete(f"lotteries/{owner_id}/{lottery_id}")
+        await self.firebase_db.delete(f"lotteries/{lottery_id}")
 
     async def check_lottery_count(self, context: ContextTypes.DEFAULT_TYPE) -> None:
         data = context.job.data
@@ -21,18 +21,18 @@ class Randomiser:
         goal_participants = data["goal_participants"]
 
         participants = await self.firebase_db.read(
-            f"lotteries/{owner_id}/{lottery_id}/participants") or []
+            f"lotteries/{lottery_id}/participants") or []
 
         if len(participants) >= goal_participants:
             await self.get_result(context)
             context.job.schedule_removal()
-            await self.firebase_db.delete(f"lotteries/{owner_id}/{lottery_id}")
+            await self.firebase_db.delete(f"lotteries/{lottery_id}")
 
     async def get_result(self, context: ContextTypes.DEFAULT_TYPE) -> None:
         data = context.job.data
         owner_id, lottery_id = data["owner_id"], data["lottery_id"]
         publisher_chat_id = data["publisher_chat_id"]
-        participants = await self.firebase_db.read(f"lotteries/{owner_id}/{lottery_id}/participants")
+        participants = await self.firebase_db.read(f"lotteries/{lottery_id}/participants")
         if not participants:
             await context.bot.send_message(chat_id=publisher_chat_id, text="No one participated")
             return
