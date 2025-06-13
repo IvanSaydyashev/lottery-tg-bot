@@ -12,7 +12,6 @@ from telegram.ext import ConversationHandler, CommandHandler, CallbackQueryHandl
 from telegram.error import TelegramError
 
 from bot.randomiser import Randomiser
-from services.utils import encode_payload
 from services.firebase import FirebaseClient
 
 logger = logging.getLogger(__name__)
@@ -207,6 +206,9 @@ class Lottery:
             await query.edit_message_text(self.lottery_num_winners_guide)
             await query.edit_message_reply_markup(self.back_keyboard)
             return self.NewLotteryState.NUM_WINNERS.value
+        elif data == "back_data":
+            await query.edit_message_text(self.lottery_text_guide)
+            return self.NewLotteryState.TEXT.value
         data = int(data)
         if data not in ud["linked_channels"]:
             ud["linked_channels"].append(data)
@@ -223,8 +225,10 @@ class Lottery:
         if update.callback_query:
             query = update.callback_query
             if query.data == "back_data":
-                await query.edit_message_text(self.lottery_text_guide)
-                return self.NewLotteryState.TEXT.value
+                keyboard = await self.get_publisher_channels_keyboard(update, context, ready_button=True)
+                await query.edit_message_text(self.lottery_linked_channels_guide,
+                                                reply_markup=InlineKeyboardMarkup(keyboard))
+                return self.NewLotteryState.LINKED_CHANNELS.value
             return self.NewLotteryState.NUM_WINNERS.value
 
         num_winners = update.message.text
@@ -347,7 +351,7 @@ class Lottery:
             f"lotteries/{lottery_id}/max_count"
         )
         if max_count:
-            interval_seconds = 60 * 10
+            interval_seconds = 30
             context.job_queue.run_repeating(
                 self.randomise_job.check_lottery_count,
                 interval=interval_seconds,
