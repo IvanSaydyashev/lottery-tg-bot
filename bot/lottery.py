@@ -395,13 +395,3 @@ class Lottery:
                 await query.answer("Вы участвуете в розыгрыше!")
             await query.answer("Розыгрыша не было или он завершён")
         await query.answer("Розыгрыша не было или он завершён")
-
-    async def generate_invite_link(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-        bot_username = self.bot_username
-
-        lottery_id = context.user_data["lottery_id"]
-        user_id = update.effective_user.id
-        encoded_payload = encode_payload(user_id, lottery_id)
-
-        url = f"https://t.me/{bot_username}?start={encoded_payload}"
-        return url
