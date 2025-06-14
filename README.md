@@ -1,6 +1,6 @@
 # lottery-tg-bot
 
-**This telegram bot will help you create awsome lotteries 🎉!**
+**This telegram bot will help you create awesome lotteries 🎉!**
 
 ## Video tutorial (in russian)
 
