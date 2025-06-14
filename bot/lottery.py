@@ -12,6 +12,7 @@ from telegram.ext import ConversationHandler, CommandHandler, CallbackQueryHandl
 from telegram.error import TelegramError
 
 from bot.randomiser import Randomiser
+from services.utils import encode_payload
 from services.firebase import FirebaseClient
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,6 @@ class Lottery:
     def __init__(self, firebase: FirebaseClient, randomiser: Randomiser, bot_username: str):
         self.firebase_db = firebase
         self.randomise_job = randomiser
-        self.bot_username = bot_username
         self.mode_keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("Закончить по дате", callback_data="mode_date")],
             [InlineKeyboardButton("Закончить по числу участников", callback_data="mode_count")],
@@ -255,6 +255,7 @@ class Lottery:
                                         reply_markup=self.back_keyboard)
         return self.NewLotteryState.NUM_WINNERS.value
 
+
     async def lottery_mode(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         logger.info("setting mode")
         query = update.callback_query
@@ -270,6 +271,7 @@ class Lottery:
         await query.edit_message_text(self.lottery_num_winners_guide,
                                       reply_markup=self.back_keyboard)
         return self.NewLotteryState.NUM_WINNERS.value
+
 
     async def lottery_count(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         logger.info("setting mode: count")
@@ -294,6 +296,7 @@ class Lottery:
         await update.message.reply_text("Неверный формат. Введите максимальное число участников (целое число).",
                                         reply_markup=self.back_keyboard)
         return self.NewLotteryState.COUNT.value
+
 
     async def lottery_date(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         logger.info("setting mode: date")

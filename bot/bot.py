@@ -24,15 +24,7 @@ class Bot:
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Send a message when the command /start is issued."""
         if context.args:
-            data = decode_payload(context.args[0])
-            owner_id = data["user_id"]
-            lottery_id = data["lottery_id"]
-            this_lottery = await self.firebase_db.read(f"lotteries/{owner_id}/{lottery_id}") or []
-            if not this_lottery:
-                await context.bot.send_message(chat_id=update.effective_chat.id, text="Розыгрыш не существует или уже завершен!")
-            await update.message.reply_text(f"Вы присоединились к розыгрышу с ID {lottery_id}!")
-            await self.firebase_db.update(f"lotteries/{owner_id}/{lottery_id}/participants/",
-                                          {update.effective_user.id: update.effective_user.username})
+            await self.join_lot(update, context)
         keyboard = ReplyKeyboardMarkup(
             [[KeyboardButton("🎉 Создать розыгрыш")]],
             resize_keyboard=True,
@@ -81,3 +73,23 @@ class Bot:
                     await self.lottery.update_channel_list_message(update, context)
             case _:
                 pass
+
+    async def join_lot(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user_id = update.effective_user.id
+        data = decode_payload(context.args[0])
+        owner_id = data["user_id"]
+        lottery_id = data["lottery_id"]
+        this_lottery = await self.firebase_db.read(f"lotteries/{owner_id}/{lottery_id}") or []
+        publisher_chat_id = this_lottery["publisher_chat_id"]
+        member = await context.bot.get_chat_member(chat_id=publisher_chat_id, user_id=user_id)
+        if member.status in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR]:
+            if not this_lottery:
+                await context.bot.send_message(chat_id=update.effective_chat.id,
+                                               text="Розыгрыш не существует или уже завершен!")
+            await update.message.reply_text(f"Вы присоединились к розыгрышу с ID {lottery_id}!")
+            await self.firebase_db.update(f"lotteries/{owner_id}/{lottery_id}/participants/",
+                                          {update.effective_user.id: update.effective_user.username})
+            return
+
+        await context.bot.send_message(chat_id=update.effective_chat.id,
+                                       text="Для участия в розыгрыше необходимо быть участником канала:")
