@@ -99,7 +99,10 @@ class Lottery:
                         CallbackQueryHandler(self.setup_lot)
                     ],
                     self.NewLotteryState.TEXT.value: [
-                        MessageHandler(filters.TEXT & ~filters.COMMAND, self.lottery_text),
+                        MessageHandler(
+                            (filters.TEXT | filters.PHOTO | filters.Document.IMAGE) & ~filters.COMMAND,
+                            self.lottery_text
+                        ),
                     ],
                     self.NewLotteryState.LINKED_CHANNELS.value: [
                         CallbackQueryHandler(self.add_linked_channels),
@@ -182,10 +185,19 @@ class Lottery:
 
     async def lottery_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         logger.info("adding text")
-        description = update.message
+        message = update.message
+        description = message.caption or message.text or None
+
+        photo_file_id = None
+        if message.photo:
+            photo_file_id = message.photo[-1].file_id
+        elif message.document and message.document.mime_type.startswith("image/"):
+            photo_file_id = message.document.file_id
+
         await self.firebase_db.write(f"lotteries/{context.user_data['lottery_id']}", {
             "owner": update.effective_user.id,
-            "description": description.text
+            "description": description,
+            "photo_id": photo_file_id,
         })
 
         keyboard = await self.get_publisher_channels_keyboard(update, context, ready_button=True)
@@ -367,11 +379,19 @@ class Lottery:
         await context.bot.send_message(chat_id=update.effective_user.id,
                                        text=f"Розыгрыш успешно опубликован!\n")
         keyboad = [[InlineKeyboardButton("Участвовать", callback_data=f"participate {lottery_id}")]]
-        await context.bot.send_message(
-            chat_id=chat_id, text=description,
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(keyboad)
-        )
+        photo_id = await self.firebase_db.read(f"lotteries/{lottery_id}/photo_id")
+        if photo_id:
+            await context.bot.send_photo(
+                chat_id=chat_id,
+                photo=photo_id, caption=description,
+                reply_markup=InlineKeyboardMarkup(keyboad)
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=chat_id, text=description,
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboad)
+            )
 
     async def participate_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.info(f"participating button clicked by: {update.effective_user.username}")
